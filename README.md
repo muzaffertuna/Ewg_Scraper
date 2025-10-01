@@ -21,7 +21,7 @@ This project contains scrapers that collect product names and ingredients from v
 
 To run this project, you need:
 
-- **Python 3.8 or higher** ([Download](https://www.python.org/downloads/))
+- **Python 3.10 or higher** ([Download](https://www.python.org/downloads/))
 - **Google Chrome** (latest version must be installed)
 - **Internet connection** (for scraping operations)
 
