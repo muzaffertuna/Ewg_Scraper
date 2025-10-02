@@ -3,8 +3,6 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import os  # Dosya varlığını kontrol etmek için os modülünü ekledik
@@ -26,17 +24,42 @@ CATEGORIES = [
     # {"name": "Toners__astringents", "product_count": 1000} # 1 kişi
 ]
 
-# Selenium tarayıcı başlat
+# Selenium tarayıcı başlat - ULTRA AGGRESSIVE MODE
 options = webdriver.ChromeOptions()
 options.add_argument('--headless')
 options.add_argument('--no-sandbox')
 options.add_argument('--disable-dev-shm-usage')
 options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+
+# 🚀 PERFORMANS BOOST: Gereksiz yükleri kapat
+options.add_argument('--disable-blink-features=AutomationControlled')
+options.add_argument('--disable-extensions')
+options.add_argument('--disable-plugins')
+options.add_argument('--disable-images')  # RESİMLERİ YÜKLEME
+options.add_argument('--blink-settings=imagesEnabled=false')
+options.add_experimental_option("prefs", {
+    "profile.managed_default_content_settings.images": 2,  # Resimleri engelle
+    "profile.default_content_setting_values.notifications": 2,  # Bildirimleri engelle
+    "profile.managed_default_content_settings.stylesheets": 2,  # CSS'i engelle (opsiyonel)
+})
+
+# 🧠 MEMORY OPTIMIZATION
+options.add_argument('--disable-gpu')
+options.add_argument('--disable-software-rasterizer')
+options.add_argument('--disable-background-networking')
+options.add_argument('--disable-default-apps')
+options.add_argument('--disable-sync')
+options.add_argument('--metrics-recording-only')
+options.add_argument('--mute-audio')
+
+# ⚡ PAGE LOAD STRATEGY: Normal yerine 'eager' kullan (DOM ready olunca devam et)
+options.page_load_strategy = 'eager'  # 'normal' yerine 'eager' - DOM ready'de devam eder
+
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
-# ⏱️ HARD MODE: Agresif timeout ayarları
-driver.set_page_load_timeout(15)
-driver.implicitly_wait(5)
+# ⏱️ ULTRA FAST MODE: Minimum timeout (emergency stop var artık)
+driver.set_page_load_timeout(20)  # Emergency stop var, 20 saniye yeter
+driver.implicitly_wait(3)  # 3 saniye yeterli
 
 
 def get_product_links_batch(category_slug, start_page, page_batch_size=10, already_collected=0, limit=250):
@@ -51,12 +74,26 @@ def get_product_links_batch(category_slug, start_page, page_batch_size=10, alrea
         url = f"{BASE_URL}/browse/category/{category_slug}/?category={category_display}&page={page}"
 
         print(f"  Sayfa {page} taranıyor...")
-        try:
-            driver.get(url)
-            time.sleep(1.5)
-        except Exception as e:
-            print(f"  ⚠️ Sayfa {page} yüklenemedi, atlanıyor: {e}")
-            break
+        
+        # Retry mekanizması ile sayfa yükleme
+        page_loaded = False
+        for retry_attempt in range(2):  # 2 deneme yeter (hız için)
+            try:
+                driver.get(url)
+                time.sleep(0.8)  # ⚡ 2.5 → 0.8 saniye (eager mode var)
+                page_loaded = True
+                break
+            except Exception as e:
+                if retry_attempt < 1:  # Son denemede değilse
+                    print(f"  ⚠️ Sayfa {page} yükleme hatası (Deneme {retry_attempt + 1}/2), tekrar deneniyor...")
+                    time.sleep(2)  # ⚡ 5 → 2 saniye
+                else:
+                    print(f"  ❌ Sayfa {page} 2 denemede de yüklenemedi, atlanıyor: {str(e)[:100]}")
+        
+        # Sayfa yüklenemediyse bir sonraki sayfaya geç
+        if not page_loaded:
+            page += 1
+            continue
 
         products = driver.find_elements(By.CSS_SELECTOR, "a[href*='/skindeep/products/']")
 
@@ -87,12 +124,28 @@ def get_product_links_batch(category_slug, start_page, page_batch_size=10, alrea
 
 
 def scrape_product(url, retries=2):
-    """HARD MODE: Hızlı scraping, minimal bekleme"""
+    """ULTRA FAST MODE: Minimum bekleme, emergency stop"""
     for attempt in range(1, retries + 1):
         try:
-            driver.get(url)
-            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(2)
+            # 🚨 CRITICAL FIX: Page load timeout'tan önce emergency stop
+            # Timeout'u geçici olarak 10 saniyeye düşür
+            driver.set_page_load_timeout(10)
+            
+            try:
+                driver.get(url)
+                time.sleep(0.3)  # DOM parse için minimal bekleme
+            except Exception:
+                # Timeout alındıysa, yüklemeyi durdur ve mevcut HTML'i al
+                try:
+                    driver.execute_script("window.stop();")
+                    print(f"  🛑 Timeout! Sayfa zorla durduruldu: {url[:80]}...")
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+            
+            # Timeout'u geri yükselt
+            driver.set_page_load_timeout(20)
+            
             soup = BeautifulSoup(driver.page_source, 'html.parser')
 
             # ✅ Ürün adı: Tüm h1'leri çek, ikincisini al (ilk "Advanced Search" oluyor)
@@ -128,15 +181,83 @@ def scrape_product(url, retries=2):
         except Exception as e:
             print(f"⚡ Deneme {attempt}/{retries} - Hata {url}: {str(e)[:100]}")
             if attempt < retries:
-                time.sleep(3)
+                time.sleep(2)  # ⚡ 5 → 2 saniye (hız için)
             continue
     return {'name': None, 'ingredients': None}
 
 
+def restart_driver():
+    """Driver'ı yeniden başlat - memory leak'i önlemek için"""
+    global driver
+    try:
+        driver.quit()
+    except Exception:
+        pass
+    
+    # Yeni driver oluştur
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-plugins')
+    options.add_argument('--disable-images')
+    options.add_argument('--blink-settings=imagesEnabled=false')
+    options.add_experimental_option("prefs", {
+        "profile.managed_default_content_settings.images": 2,
+        "profile.default_content_setting_values.notifications": 2,
+        "profile.managed_default_content_settings.stylesheets": 2,
+    })
+    options.add_argument('--disable-gpu')
+    options.add_argument('--disable-software-rasterizer')
+    options.add_argument('--disable-background-networking')
+    options.add_argument('--disable-default-apps')
+    options.add_argument('--disable-sync')
+    options.add_argument('--metrics-recording-only')
+    options.add_argument('--mute-audio')
+    options.page_load_strategy = 'eager'
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.set_page_load_timeout(20)  # ⚡ 30 → 20
+    driver.implicitly_wait(3)  # ⚡ 8 → 3
+    
+    return driver
+
+
 if __name__ == "__main__":
-    output_file = "CC_Cream.csv"
+    # 🔧 FIX: CSV dosyasını script ile aynı dizinde oluştur
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_file = os.path.join(script_dir, "CC_Cream.csv")
+    
+    PAGE_BATCH_SIZE = 15  # ⚡ 10 → 15 sayfa (daha az restart = daha hızlı)
+    
+    # ✅ RESUME CAPABILITY: Eğer CSV varsa, kaldığı yerden devam et
     id_counter = 1
-    PAGE_BATCH_SIZE = 10  # Her seferde 10 sayfa işle
+    existing_urls = set()
+    resume_enabled = False
+    
+    if os.path.exists(output_file):
+        try:
+            existing_df = pd.read_csv(output_file)
+            if not existing_df.empty:
+                id_counter = existing_df['id'].max() + 1
+                existing_urls = set(existing_df['product_url'].tolist())
+                resume_enabled = True
+                print("\n" + "="*70)
+                print("📂 RESUME MODE AKTIF!")
+                print(f"   Mevcut CSV: {output_file}")
+                print(f"   Toplam ürün: {len(existing_df)}")
+                print(f"   Son ID: {id_counter - 1}")
+                print(f"   Yeni ID: {id_counter} (devam edecek)")
+                print(f"   {len(existing_urls)} URL duplicate kontrolünde")
+                print("="*70 + "\n")
+        except Exception as e:
+            print(f"⚠️ CSV okuma hatası: {e}. Sıfırdan başlanıyor.")
+            resume_enabled = False
+    else:
+        print(f"\n📝 Yeni CSV oluşturulacak: {output_file}\n")
 
     for category in CATEGORIES:
         category_name = category["name"]
@@ -144,11 +265,17 @@ if __name__ == "__main__":
         print(f"Kategori işleniyor: {category_name} ({product_count} ürün)")
 
         current_page = 1
-        total_collected = 0
+        
+        # 🔧 RESUME: Eğer zaten ürün varsa, total_collected'ı ayarla
+        if resume_enabled and len(existing_urls) > 0:
+            total_collected = len(existing_urls)
+            print(f"🔄 Resume Mode: Mevcut {total_collected} ürün, hedef {product_count} ürün")
+        else:
+            total_collected = 0
         
         # Batch batch işle: her seferde PAGE_BATCH_SIZE sayfa tara, scrape et, kaydet
         while total_collected < product_count:
-            print(f"\n--- Batch işleniyor: Sayfa {current_page} - {current_page + PAGE_BATCH_SIZE - 1} ---")
+            print(f"\n⚡ ULTRA FAST BATCH: Sayfa {current_page} - {current_page + PAGE_BATCH_SIZE - 1} ⚡")
             
             # Bu batch'teki URL'leri topla
             product_urls, next_page = get_product_links_batch(
@@ -165,7 +292,13 @@ if __name__ == "__main__":
                 break
             
             # Bu batch'teki URL'leri hemen scrape et ve kaydet
+            skipped_count = 0
             for url in product_urls:
+                # 🔍 Duplicate kontrolü: Bu URL zaten scrape edildiyse atla
+                if url in existing_urls:
+                    skipped_count += 1
+                    continue  # Sayıma dahil etme, sadece skip et
+                
                 product_data = scrape_product(url)
 
                 # ❌ Eğer ürün bilgisi alınamadıysa (name=None), atla ve kaydetme
@@ -192,6 +325,9 @@ if __name__ == "__main__":
 
                 print(f"Kaydedildi: ID {id_counter} - {product_data.get('name', 'Hata!')}")
 
+                # URL'i hafızaya ekle (duplicate önlemi)
+                existing_urls.add(url)
+                
                 id_counter += 1
                 total_collected += 1
                 
@@ -202,7 +338,17 @@ if __name__ == "__main__":
             # Bir sonraki batch için sayfa numarasını güncelle
             current_page = next_page
             
-            print(f"Batch tamamlandı. Toplam {total_collected}/{product_count} ürün toplandı.")
+            # Batch özeti
+            if skipped_count > 0:
+                print(f"\n✅ Batch tamamlandı! {total_collected}/{product_count} ürün | ⏭️ {skipped_count} duplicate skip")
+            else:
+                print(f"\n✅ Batch tamamlandı! {total_collected}/{product_count} ürün")
+            
+            # 🔄 HER BATCH SONRASI DRIVER'I RESTART ET (Memory leak önlemi)
+            if total_collected < product_count:
+                print("🔄 Driver yeniden başlatılıyor (memory temizliği)...")
+                driver = restart_driver()
+                time.sleep(0.5)  # ⚡ 2 → 0.5 saniye
 
     # Tarayıcıyı kapat
     driver.quit()
