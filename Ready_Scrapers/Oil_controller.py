@@ -139,7 +139,7 @@ if __name__ == "__main__":
             # Anlık olarak DataFrame oluştur
             df_row = pd.DataFrame([{
                 "id": id_counter,
-                # "category": category_name,
+                "category": category_name,
                 # "product_count": product_count,
                 "product_url": url,
                 "name": product_data['name'],
