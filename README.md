@@ -120,14 +120,15 @@ Each scraper creates a CSV file with the following columns:
 | `id` | Unique product ID | 1, 2, 3... |
 | `product_url` | Product's EWG page | https://www.ewg.org/skindeep/products/... |
 | `name` | Product name | "Neutrogena Hydro Boost" |
+| `category` | Product category | "Anti-aging", "Face Mask" |
 | `ingredients` | Ingredients list | "Water, Glycerin, Dimethicone..." |
 
 ### Sample CSV Output:
 
 ```csv
-id,product_url,name,ingredients
-1,https://www.ewg.org/skindeep/products/123456,Product Name 1,"Water, Glycerin, Sodium Hyaluronate"
-2,https://www.ewg.org/skindeep/products/123457,Product Name 2,"Aqua, Butylene Glycol, Niacinamide"
+id,product_url,name,category,ingredients
+1,https://www.ewg.org/skindeep/products/123456,Product Name 1,Anti-aging,"Water, Glycerin, Sodium Hyaluronate"
+2,https://www.ewg.org/skindeep/products/123457,Product Name 2,Face Mask,"Aqua, Butylene Glycol, Niacinamide"
 ```
 
 ## ⚙️ Technical Details
