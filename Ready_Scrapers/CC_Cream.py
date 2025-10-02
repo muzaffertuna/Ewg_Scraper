@@ -34,25 +34,35 @@ options.add_argument('--disable-dev-shm-usage')
 options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
+# ⏱️ HARD MODE: Agresif timeout ayarları
+driver.set_page_load_timeout(15)
+driver.implicitly_wait(5)
 
-def get_product_links(category_slug, limit=285):
+
+def get_product_links_batch(category_slug, start_page, page_batch_size=10, already_collected=0, limit=250):
+    """Belirli sayıda sayfayı tarayıp URL'leri toplar"""
     product_links = []
-    page = 1
+    page = start_page
+    max_page = start_page + page_batch_size
 
-    while len(product_links) < limit:
+    while page < max_page and (already_collected + len(product_links)) < limit:
         # Sayfa numarası ile URL oluştur
         category_display = category_slug.replace("_", " ").replace("  ", "/")
         url = f"{BASE_URL}/browse/category/{category_slug}/?category={category_display}&page={page}"
 
         print(f"  Sayfa {page} taranıyor...")
-        driver.get(url)
-        time.sleep(3)  # sayfanın yüklenmesi için bekle
+        try:
+            driver.get(url)
+            time.sleep(1.5)
+        except Exception as e:
+            print(f"  ⚠️ Sayfa {page} yüklenemedi, atlanıyor: {e}")
+            break
 
         products = driver.find_elements(By.CSS_SELECTOR, "a[href*='/skindeep/products/']")
 
         # Eğer sayfada ürün yoksa, son sayfaya ulaşmışız demektir
         if not products:
-            print(f"  Sayfa {page}'de ürün bulunamadı. Toplam sayfa: {page - 1}")
+            print(f"  Sayfa {page}'de ürün bulunamadı. Batch taraması tamamlandı.")
             break
 
         page_product_count = 0
@@ -61,27 +71,28 @@ def get_product_links(category_slug, limit=285):
             if href and "/skindeep/products/" in href and href not in product_links:
                 product_links.append(href)
                 page_product_count += 1
-                if len(product_links) >= limit:
+                if (already_collected + len(product_links)) >= limit:
                     break
 
-        print(f"  Sayfa {page}'den {page_product_count} ürün bulundu (Toplam: {len(product_links)})")
+        print(f"  Sayfa {page}'den {page_product_count} ürün bulundu (Batch Toplam: {len(product_links)})")
 
         # Eğer bu sayfadan yeni ürün eklenmediyse, döngüden çık
         if page_product_count == 0:
-            print(f"  Sayfa {page}'de yeni ürün bulunamadı. Tarama tamamlandı.")
+            print(f"  Sayfa {page}'de yeni ürün bulunamadı. Batch taraması tamamlandı.")
             break
 
         page += 1
 
-    return product_links
+    return product_links, page
 
 
-def scrape_product(url, retries=3):
+def scrape_product(url, retries=2):
+    """HARD MODE: Hızlı scraping, minimal bekleme"""
     for attempt in range(1, retries + 1):
         try:
             driver.get(url)
-            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(5)  # sayfa tam yüklenmesi için
+            WebDriverWait(driver, 8).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(2)
             soup = BeautifulSoup(driver.page_source, 'html.parser')
 
             # ✅ Ürün adı: Tüm h1'leri çek, ikincisini al (ilk "Advanced Search" oluyor)
@@ -115,9 +126,9 @@ def scrape_product(url, retries=3):
                 'ingredients': ingredients_text
             }
         except Exception as e:
-            print(f"Deneme {attempt}/{retries} - Hata {url}: {e}")
+            print(f"⚡ Deneme {attempt}/{retries} - Hata {url}: {str(e)[:100]}")
             if attempt < retries:
-                time.sleep(10)  # Retry öncesi bekle
+                time.sleep(3)
             continue
     return {'name': None, 'ingredients': None}
 
@@ -125,37 +136,73 @@ def scrape_product(url, retries=3):
 if __name__ == "__main__":
     output_file = "CC_Cream.csv"
     id_counter = 1
+    PAGE_BATCH_SIZE = 10  # Her seferde 10 sayfa işle
 
     for category in CATEGORIES:
         category_name = category["name"]
         product_count = category["product_count"]
         print(f"Kategori işleniyor: {category_name} ({product_count} ürün)")
 
-        product_urls = get_product_links(category_name)
+        current_page = 1
+        total_collected = 0
+        
+        # Batch batch işle: her seferde PAGE_BATCH_SIZE sayfa tara, scrape et, kaydet
+        while total_collected < product_count:
+            print(f"\n--- Batch işleniyor: Sayfa {current_page} - {current_page + PAGE_BATCH_SIZE - 1} ---")
+            
+            # Bu batch'teki URL'leri topla
+            product_urls, next_page = get_product_links_batch(
+                category_name, 
+                start_page=current_page, 
+                page_batch_size=PAGE_BATCH_SIZE,
+                already_collected=total_collected,
+                limit=product_count
+            )
+            
+            # Eğer URL bulunamadıysa, işlem tamamlanmış demektir
+            if not product_urls:
+                print("Daha fazla ürün bulunamadı. Kategori tamamlandı.")
+                break
+            
+            # Bu batch'teki URL'leri hemen scrape et ve kaydet
+            for url in product_urls:
+                product_data = scrape_product(url)
 
-        for url in product_urls:
-            product_data = scrape_product(url)
+                # ❌ Eğer ürün bilgisi alınamadıysa (name=None), atla ve kaydetme
+                if product_data['name'] is None:
+                    print(f"⚠️ ATLANDI (Hatalı ürün): {url}")
+                    continue
 
-            # Anlık olarak DataFrame oluştur
-            df_row = pd.DataFrame([{
-                "id": id_counter,
-                "category": category_name,
-                # "product_count": product_count,
-                "product_url": url,
-                "name": product_data['name'],
-                "ingredients": product_data['ingredients']
-            }])
+                # Anlık olarak DataFrame oluştur
+                df_row = pd.DataFrame([{
+                    "id": id_counter,
+                    "category": category_name,
+                    # "product_count": product_count,
+                    "product_url": url,
+                    "name": product_data['name'],
+                    "ingredients": product_data['ingredients']
+                }])
 
-            # Dosyanın var olup olmadığını kontrol ederek başlık (header) eklenip eklenmeyeceğine karar ver
-            # Dosya yoksa header=True, varsa header=False olacak
-            header = not os.path.exists(output_file)
+                # Dosyanın var olup olmadığını kontrol ederek başlık (header) eklenip eklenmeyeceğine karar ver
+                # Dosya yoksa header=True, varsa header=False olacak
+                header = not os.path.exists(output_file)
 
-            # 'append' modunda ('a') dosyaya ekle
-            df_row.to_csv(output_file, mode='a', header=header, index=False, encoding="utf-8")
+                # 'append' modunda ('a') dosyaya ekle
+                df_row.to_csv(output_file, mode='a', header=header, index=False, encoding="utf-8")
 
-            print(f"Kaydedildi: ID {id_counter} - {product_data.get('name', 'Hata!')}")
+                print(f"Kaydedildi: ID {id_counter} - {product_data.get('name', 'Hata!')}")
 
-            id_counter += 1
+                id_counter += 1
+                total_collected += 1
+                
+                # Eğer limit'e ulaştıysak dur
+                if total_collected >= product_count:
+                    break
+            
+            # Bir sonraki batch için sayfa numarasını güncelle
+            current_page = next_page
+            
+            print(f"Batch tamamlandı. Toplam {total_collected}/{product_count} ürün toplandı.")
 
     # Tarayıcıyı kapat
     driver.quit()
